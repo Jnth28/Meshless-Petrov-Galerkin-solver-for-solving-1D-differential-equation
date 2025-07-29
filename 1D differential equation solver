@@ -1,0 +1,213 @@
+% MLPG solver for u&#39;&#39; = 2 with u(0)=0, u(1)=0
+clear all; close all; clc;
+%% Problem Parameters
+L = 1; % Domain length [0,1]
+f = @(x) 2; % Source term (u&#39;&#39; = 2)
+exact_sol = @(x) x.*(1-x); % Exact solution: u(x) = x - x^2
+%% Node Generation
+n_nodes = 41; % Total number of nodes
+% Equally spaced nodes (for MLPG)
+x_eq = linspace(0, L, n_nodes)&#39;;
+% Unequally spaced nodes (for comparison)
+x_uneq = sort([0; L; L*rand(n_nodes-2,1)]);
+% FEM nodes (same as equally spaced for fair comparison)
+x_fem = x_eq;
+%% MLPG Parameters
+support_radius = 3.5*mean(diff(x_eq)); % Support domain size
+
+1
+
+quad_points = 5; % Gauss points per subdomain
+shape_param = 10; % MLS shape parameter
+%% Weight Function Definitions
+% 1. MLS Weight Function (for shape function construction)
+% Cubic spline weight function
+mls_weight = @(r, r_max) (1 - (r/r_max).^2).^3 .* (r &lt;= r_max);
+% 2. Test Function Weight (for Petrov-Galerkin weak form)
+% Quartic spline weight function
+test_weight = @(r, r_max) (1 - (r/r_max).^2).^4 .* (r &lt;= r_max);
+%% MLPG Solver (for both equal and unequal spacing)
+[x_mlpg_eq, u_mlpg_eq] = solve_mlpg(x_eq, support_radius, f, exact_sol, mls_weight,
+test_weight, shape_param, quad_points, L);
+[x_mlpg_uneq, u_mlpg_uneq] = solve_mlpg(x_uneq, support_radius, f, exact_sol,
+mls_weight, test_weight, shape_param, quad_points, L);
+%% FEM Solver (for comparison)
+u_fem = solve_fem(x_fem, f, L);
+%% Plot Results
+figure;
+hold on;
+% Exact solution
+x_plot = linspace(0, L, 100)&#39;;
+plot(x_plot, exact_sol(x_plot), &#39;b-&#39;, &#39;LineWidth&#39;, 2, &#39;DisplayName&#39;, &#39;Exact&#39;);
+% Numerical solutions
+%plot(x_mlpg_eq, u_mlpg_eq, &#39;ro--&#39;, &#39;MarkerFaceColor&#39;, &#39;r&#39;, &#39;DisplayName&#39;, &#39;MLPG
+(Equal)&#39;);
+%plot(x_mlpg_uneq, u_mlpg_uneq, &#39;gs--&#39;, &#39;MarkerFaceColor&#39;, &#39;g&#39;, &#39;DisplayName&#39;,
+&#39;MLPG (Unequal)&#39;);
+plot(x_fem, u_fem, &#39;k^--&#39;, &#39;MarkerFaceColor&#39;, &#39;k&#39;, &#39;DisplayName&#39;, &#39;FEM&#39;);
+xlabel(&#39;x&#39;); ylabel(&#39;u(x)&#39;);
+%title(&#39;Comparison of MLPG and FEM Solutions&#39;);
+title(&#39;FEM Solution&#39;);
+legend(&#39;Location&#39;, &#39;NorthEast&#39;);
+grid on;
+%% Error Calculation
+%fprintf(&#39;Equal-spaced MLPG L2 error: %.4e\n&#39;, l2_error(x_mlpg_eq, u_mlpg_eq,
+exact_sol));
+%fprintf(&#39;Unequal-spaced MLPG L2 error: %.4e\n&#39;, l2_error(x_mlpg_uneq, u_mlpg_uneq,
+exact_sol));
+%fprintf(&#39;FEM L2 error: %.4e\n&#39;, l2_error(x_fem, u_fem, exact_sol));
+fprintf(&#39;FEM L2 error: %.4e\n&#39;, l2_error(x_fem, u_fem, exact_sol));
+%% MLPG Solver Function
+
+1
+
+function [x, u] = solve_mlpg(x, support_radius, f, exact_sol, mls_weight,
+test_weight, shape_param, quad_points, L)
+n_nodes = length(x);
+h_avg = mean(diff(x));
+% Initialize system matrices
+K = zeros(n_nodes, n_nodes);
+F = zeros(n_nodes, 1);
+% For each node (subdomain)
+for i = 1:n_nodes
+xi = x(i);
+% Determine integration domain (subdomain)
+x_min = max(0, xi - support_radius/2);
+x_max = min(L, xi + support_radius/2);
+% Gauss quadrature in subdomain
+[gauss_pts, gauss_wts] = gauss_quad(quad_points, x_min, x_max);
+for q = 1:quad_points
+xq = gauss_pts(q);
+wq = gauss_wts(q);
+% Find supporting nodes for MLS
+dist = abs(x - xq);
+supp_nodes = find(dist &lt;= support_radius);
+% Compute MLS shape functions and derivatives
+[phi, dphi, d2phi] = mls_shape(xq, x(supp_nodes), support_radius, ...
+mls_weight, shape_param);
+% Compute test function and derivative at xq
+r_test = abs(xq - xi);
+W = test_weight(r_test, support_radius/2);
+dW = -8*r_test/support_radius^2*(1 - (r_test/(support_radius/2))^2)^3;
+dW = dW * sign(xq - xi);
+% Assemble contributions
+for j = 1:length(supp_nodes)
+jj = supp_nodes(j);
+% Stiffness term (∫W&#39;φ&#39; dx)
+K(i,jj) = K(i,jj) + dW * dphi(j) * wq;
+% Force term (∫W*f dx)
+F(i) = F(i) + W * f(xq) * wq;
+end
+end
+end
+% Apply boundary conditions
+boundary_nodes = [1; n_nodes];
+K(boundary_nodes,:) = 0;
+K(boundary_nodes,boundary_nodes) = eye(2);
+F(boundary_nodes) = exact_sol(x(boundary_nodes));
+% Solve system
+u = K \ F;
+end
+%% FEM Solver Function
+function u = solve_fem(x, f, L)
+n_nodes = length(x);
+n_elems = n_nodes - 1;
+
+1
+
+% Initialize
+K = zeros(n_nodes, n_nodes);
+F = zeros(n_nodes, 1);
+% Assembly
+for e = 1:n_elems
+h = x(e+1) - x(e);
+% Element stiffness
+Ke = [1/h, -1/h; -1/h, 1/h];
+% Element force (assuming constant f)
+Fe = f((x(e)+x(e+1))/2)*[h/2; h/2];
+% Global assembly
+nodes = [e, e+1];
+K(nodes, nodes) = K(nodes, nodes) + Ke;
+F(nodes) = F(nodes) + Fe;
+end
+% Boundary conditions
+boundary_nodes = [1; n_nodes];
+K(boundary_nodes,:) = 0;
+K(boundary_nodes,boundary_nodes) = eye(2);
+F(boundary_nodes) = 0;
+% Solve
+u = K \ F;
+end
+%% MLS Shape Function Computation
+function [phi, dphi, d2phi] = mls_shape(xq, xi, r_max, weight_func, shape_param)
+n = length(xi);
+r = abs(xq - xi);
+% Compute weights and derivatives
+W = weight_func(r, r_max);
+dW = -6*r/r_max^2.*(1 - (r/r_max).^2).^2;
+dW = dW .* sign(xq - xi);
+d2W = -6/r_max^2*(1 - (r/r_max).^2).*(1 - 5*(r/r_max).^2);
+% Quadratic basis
+p = @(x)[1; x-xq; (x-xq)^2];
+dp = @(x)[0; 1; 2*(x-xq)];
+d2p = @(x)[0; 0; 2];
+% Compute moment matrix and derivatives
+A = zeros(3,3); dA = zeros(3,3); d2A = zeros(3,3);
+B = zeros(3,n); dB = zeros(3,n); d2B = zeros(3,n);
+for i = 1:n
+pi = p(xi(i)); dpi = dp(xi(i)); d2pi = d2p(xi(i));
+A = A + W(i)*(pi*pi&#39;);
+dA = dA + dW(i)*(pi*pi&#39;) + W(i)*(dpi*pi&#39; + pi*dpi&#39;);
+d2A = d2A + d2W(i)*(pi*pi&#39;) + 2*dW(i)*(dpi*pi&#39; + pi*dpi&#39;) + ...
+W(i)*(d2pi*pi&#39; + 2*dpi*dpi&#39; + pi*d2pi&#39;);
+B(:,i) = W(i)*pi;
+dB(:,i) = dW(i)*pi + W(i)*dpi;
+d2B(:,i) = d2W(i)*pi + 2*dW(i)*dpi + W(i)*d2pi;
+end
+% Compute shape functions and derivatives
+invA = inv(A);
+
+1
+
+phi = zeros(1,n); dphi = zeros(1,n); d2phi = zeros(1,n);
+for i = 1:n
+pi = p(xi(i)); dpi = dp(xi(i)); d2pi = d2p(xi(i));
+phi(i) = pi&#39; * invA * B(:,i);
+dphi(i) = dpi&#39; * invA * B(:,i) + ...
+pi&#39; * (-invA * dA * invA * B(:,i) + invA * dB(:,i));
+d2phi(i) = d2pi&#39; * invA * B(:,i) + ...
+2*dpi&#39; * (-invA * dA * invA * B(:,i) + invA * dB(:,i)) + ...
+pi&#39; * (2*invA*dA*invA*dA*invA*B(:,i) - invA*d2A*invA*B(:,i) - ...
+2*invA*dA*invA*dB(:,i) + invA*d2B(:,i));
+end
+end
+%% Gauss Quadrature Function
+function [pts, wts] = gauss_quad(n, a, b)
+switch n
+case 1
+pts = 0.5; wts = 1;
+case 2
+pts = [-0.577350269189626; 0.577350269189626];
+wts = [1; 1];
+case 3
+pts = [-0.774596669241483; 0; 0.774596669241483];
+wts = [5/9; 8/9; 5/9];
+case 4
+pts = [-0.861136311594053; -0.339981043584856; ...
+0.339981043584856; 0.861136311594053];
+wts = [0.347854845137454; 0.652145154862546; ...
+0.652145154862546; 0.347854845137454];
+case 5
+pts = [-0.906179845938664; -0.538469310105683; 0; ...
+0.538469310105683; 0.906179845938664];
+wts = [0.236926885056189; 0.478628670499366; 0.568888888888889; ...
+0.478628670499366; 0.236926885056189];
+end
+pts = (b-a)/2*pts + (a+b)/2;
+wts = wts*(b-a)/2;
+end
+%% L2 Error Calculation
+function err = l2_error(x, u, exact)
+u_exact = exact(x);
+err = sqrt(trapz(x, (u - u_exact).^2));
+end
